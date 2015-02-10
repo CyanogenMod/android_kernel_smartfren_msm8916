@@ -108,7 +108,6 @@ static int *range = ap3426_range;
 static int cali = 100;
 static int misc_ps_opened = 0;
 static int misc_ls_opened = 0;
-static int misc_ht_opened = 0;
 struct regulator *vdd;
 struct regulator *vio;
 bool power_enabled;
@@ -1328,9 +1327,7 @@ static void ap3426_work_handler(struct work_struct *w)
     struct ap3426_data *data =
 	container_of(w, struct ap3426_data, ap3426_work);
     u8 int_stat;
-    int pxvalue;
     int distance;
-    int value;
     int_stat = ap3426_get_intstat(data->client);
 
     if((1 == misc_ps_opened) && (int_stat & AP3426_REG_SYS_INT_PMASK))
@@ -1339,24 +1336,10 @@ static void ap3426_work_handler(struct work_struct *w)
 	input_report_abs(data->psensor_input_dev, ABS_DISTANCE, distance);
 	input_sync(data->psensor_input_dev);
     }
-    
-    if(1 == misc_ht_opened)
-    {
-	pxvalue = ap3426_get_px_value(data->client); 
-	input_report_abs(data->hsensor_input_dev, ABS_WHEEL, pxvalue);
-	input_sync(data->hsensor_input_dev);
-    }
-    
-    if((1 == misc_ls_opened) && (int_stat & AP3426_REG_SYS_INT_AMASK))
-    {
-	value = ap3426_get_adc_value(data->client);
-	input_report_abs(data->lsensor_input_dev, ABS_MISC, value);
-	input_sync(data->lsensor_input_dev);
-    }
-    
+
     enable_irq(data->client->irq);
 }
- 
+
 
 static irqreturn_t ap3426_irq(int irq, void *data_)
 {
