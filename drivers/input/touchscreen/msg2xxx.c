@@ -1004,7 +1004,7 @@ static void _msg_init_input(void)//modify :输入子系统，根据项目修改
 	set_bit(BTN_MISC,input->keybit);
        set_bit(KEY_OK, input->keybit);
 
-	input_set_capability(input, EV_KEY,KEY_MENU);
+	input_set_capability(input, EV_KEY,KEY_APPSELECT);
 	input_set_capability(input, EV_KEY,KEY_BACK);
 	input_set_capability(input, EV_KEY,KEY_HOMEPAGE);
 	input_set_capability(input, EV_KEY,KEY_SEARCH);
