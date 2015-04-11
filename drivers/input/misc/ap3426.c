@@ -105,7 +105,7 @@ static int ap3426_range[4] = {32768,8192,2048,512};
 static u8 *reg_array = ap3426_reg;
 static int *range = ap3426_range;
 
-static int cali = 100;
+static int cali = 320;
 static int misc_ps_opened = 0;
 static int misc_ls_opened = 0;
 struct regulator *vdd;
@@ -1323,7 +1323,8 @@ static void lsensor_work_handler(struct work_struct *w)
     int value;
 
     value = ap3426_get_adc_value(data->client);
-    input_report_abs(data->lsensor_input_dev, ABS_MISC, value * 30);
+    value = value * cali / 100;
+    input_report_abs(data->lsensor_input_dev, ABS_MISC, value);
     input_sync(data->lsensor_input_dev);
 }
 
