@@ -63,6 +63,9 @@
 
 #define PL_TIMER_DELAY 200
 
+/* Proximity high threshold, the px value ranges: 300 (FAR) to 1024 (NEAR) */
+#define PX_HIGH_THRESHOLD 350
+
 /* misc define */ 
 #define MIN_ALS_POLL_DELAY_MS	110
 
@@ -422,6 +425,7 @@ static int ap3426_ps_enable(struct ap3426_data *ps_data,int enable)
 	printk("ps enable error!!!!!!\n");
     }
 
+	ap3426_set_phthres(ps_data->client, PX_HIGH_THRESHOLD);
 //	enable_irq(ps_data->client->irq);
 
     ret = mod_timer(&ps_data->pl_timer, jiffies + msecs_to_jiffies(PL_TIMER_DELAY));
