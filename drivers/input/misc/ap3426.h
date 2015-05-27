@@ -232,6 +232,8 @@ struct ap3426_data {
     bool rels_enable;
     uint16_t	ps_thd_l;
     uint16_t	ps_thd_h;
+    struct wake_lock ps_wakelock;
+    struct mutex    int_lock;
 };
 
 #endif

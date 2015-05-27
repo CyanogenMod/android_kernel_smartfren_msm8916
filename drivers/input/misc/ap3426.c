@@ -54,6 +54,7 @@
 #include <linux/workqueue.h>
 #include <linux/timer.h>
 #include <linux/of_gpio.h>
+#include <linux/wakelock.h>
 #include "ap3426.h"
 #include <linux/regulator/consumer.h>	
 #include <linux/ioctl.h>
@@ -111,9 +112,7 @@ static int *range = ap3426_range;
 static int cali = 320;
 static int misc_ps_opened = 0;
 static int misc_ls_opened = 0;
-#ifdef AP3426_HEARTBEAT_SENSOR
 static int misc_ht_opened = 0;
-#endif /* AP3426_HEARTBEAT_SENSOR */
 struct regulator *vdd;
 struct regulator *vio;
 bool power_enabled;
@@ -384,7 +383,7 @@ static int ap3426_get_object(struct i2c_client *client)
     val &= AP3426_OBJ_MASK;
 
 //    return val >> AP3426_OBJ_SHIFT;
-	return !(val >> AP3426_OBJ_SHIFT);
+	return !(val >> AP3426_OBJ_SHIFT);//fix psensor turn green first in cit in probe,zhanghabin,20140114
 }
 
 static int ap3426_get_intstat(struct i2c_client *client)
@@ -419,6 +418,8 @@ static int ap3426_get_px_value(struct i2c_client *client)
 static int ap3426_ps_enable(struct ap3426_data *ps_data,int enable)
 {
     int32_t ret;
+    int pxvalue;
+    int distance;
 
     if(misc_ps_opened == enable)
                 return 0;
@@ -428,14 +429,19 @@ static int ap3426_ps_enable(struct ap3426_data *ps_data,int enable)
     if(ret < 0){
 	printk("ps enable error!!!!!!\n");
     }
-
-    if (enable) {
-        ap3426_set_phthres(ps_data->client, PX_HIGH_THRESHOLD);
-        /*Ensure psensor wakeup the system,zhanghaibin,20140401*/
-        input_report_abs(ps_data->psensor_input_dev, ABS_DISTANCE, 1);
-        input_sync(ps_data->psensor_input_dev);
+    /*Ensure psensor wakeup the system,zhanghaibin,20140401*/
+    if(enable)
+    {
+	distance = ap3426_get_object(ps_data->client);
+	if(distance!=1){
+		distance=1;
+	}
+	input_report_abs(ps_data->psensor_input_dev, ABS_DISTANCE, distance);
+	input_sync(ps_data->psensor_input_dev);
+	wake_lock_timeout(&ps_data->ps_wakelock, 2*HZ);
+	pxvalue = ap3426_get_px_value(ps_data->client);
+	printk(KERN_ERR "zhang %s pxvalue=%d distance=%d\n",__func__,pxvalue,distance);
     }
-
 //	enable_irq(ps_data->client->irq);
 
     //ret = mod_timer(&ps_data->pl_timer, jiffies + msecs_to_jiffies(PL_TIMER_DELAY));
@@ -547,7 +553,7 @@ static void ap3426_unregister_lsensor_device(struct i2c_client *client, struct a
 /*********************************************************************
 heartbeat sensor register & unregister
 ********************************************************************/
-#ifdef AP3426_HEARTBEAT_SENSOR
+#if 0
 static int ap3426_register_heartbeat_sensor_device(struct i2c_client *client, struct ap3426_data *data)
 {
     struct input_dev *input_dev;
@@ -580,7 +586,8 @@ static void ap3426_unregister_heartbeat_device(struct i2c_client *client, struct
 {
     input_unregister_device(data->hsensor_input_dev);
 }
-#endif /* AP3426_HEARTBEAT_SENSOR */
+#endif
+
 /*********************************************************************
 proximity sensor register & unregister
 ********************************************************************/
@@ -750,9 +757,8 @@ static int ap3426_ps_enable_set(struct sensors_classdev *sensors_cdev,
    struct ap3426_data *ps_data = container_of(sensors_cdev, 
 					   struct ap3426_data, ps_cdev); 
    int err; 
-
+   printk(KERN_ERR "zhang %s enabled=%d\n",__func__,enabled);
    err = ap3426_ps_enable(ps_data,enabled);
-
 
    if (err < 0) 
 	   return err; 
@@ -767,34 +773,31 @@ static int ap3426_power_ctl(struct ap3426_data *data, bool on)
 
 	if (!on && data->power_enabled)
 	{
-		if (!IS_ERR(data->vdd)) {
-			ret = regulator_disable(data->vdd);
-			if (ret) {
-				dev_err(&data->client->dev,
-					"Regulator vdd disable failed ret=%d\n", ret);
-				return ret;
-			}
+		ret = regulator_disable(data->vdd);
+		if (ret)
+		{
+			dev_err(&data->client->dev,
+				"Regulator vdd disable failed ret=%d\n", ret);
+			return ret;
 		}
 
-		if (!IS_ERR(data->vio)) {
-			ret = regulator_disable(data->vio);
-			if (ret) {
+		ret = regulator_disable(data->vio);
+		if (ret)
+		{
+			dev_err(&data->client->dev,
+				"Regulator vio disable failed ret=%d\n", ret);
+			ret = regulator_enable(data->vdd);
+			if (ret)
+			{
 				dev_err(&data->client->dev,
-					"Regulator vio disable failed ret=%d\n", ret);
-				if (!IS_ERR(data->vdd)) {
-					ret = regulator_enable(data->vdd);
-					if (ret) {
-						dev_err(&data->client->dev,
-							"Regulator vdd enable failed ret=%d\n",
-							ret);
-					}
-				}
-				return ret;
+					"Regulator vdd enable failed ret=%d\n",
+					ret);
 			}
+			return ret;
 		}
 
 		data->power_enabled = on;
-		printk(KERN_INFO "%s: disable ap3426 power", __func__);
+		//printk(KERN_INFO "%s: disable ap3426 power", __func__);
 		dev_dbg(&data->client->dev, "ap3426_power_ctl on=%d\n",
 				on);
 	}
@@ -809,7 +812,7 @@ static int ap3426_power_ctl(struct ap3426_data *data, bool on)
 		}
 
 		ret = regulator_enable(data->vio);
-		if (ret) 
+		if (ret)
 		{
 			dev_err(&data->client->dev,
 				"Regulator vio enable failed ret=%d\n", ret);
@@ -818,7 +821,7 @@ static int ap3426_power_ctl(struct ap3426_data *data, bool on)
 		}
 
 		data->power_enabled = on;
-		printk(KERN_INFO "%s: enable ap3426 power", __func__);
+		//printk(KERN_INFO "%s: enable ap3426 power", __func__);
 	} 
 	else
 	{
@@ -836,20 +839,17 @@ static int ap3426_power_init(struct ap3426_data*data, bool on)
 
 	if (!on)
 	{
-		if (!IS_ERR(data->vdd)) {
-			if (regulator_count_voltages(data->vdd) > 0)
-				regulator_set_voltage(data->vdd, 0, AP3426_VDD_MAX_UV);
-			regulator_put(data->vdd);
-			data->vdd = ERR_PTR(-EINVAL);
-		}
+		if (regulator_count_voltages(data->vdd) > 0)
+			regulator_set_voltage(data->vdd,
+					0, AP3426_VDD_MAX_UV);
 
-		if (!IS_ERR(data->vio)) {
-			if (regulator_count_voltages(data->vio) > 0)
-				regulator_set_voltage(data->vio, 0, AP3426_VIO_MAX_UV);
+		regulator_put(data->vdd);
 
-			regulator_put(data->vio);
-			data->vio = ERR_PTR(-EINVAL);
-		}
+		if (regulator_count_voltages(data->vio) > 0)
+			regulator_set_voltage(data->vio,
+					0, AP3426_VIO_MAX_UV);
+
+		regulator_put(data->vio);
 	}
 	else
 	{
@@ -1327,10 +1327,11 @@ static void psensor_work_handler(struct work_struct *w)
 
 	struct ap3426_data *data =container_of(w, struct ap3426_data, psensor_work);
 	int distance;
-	//int pxvalue;
+	int pxvalue;
 	
 	distance = ap3426_get_object(data->client);
-	//pxvalue = ap3426_get_px_value(data->client);
+	//test pdata
+	pxvalue = ap3426_get_px_value(data->client);
 	//printk("zhang distance=%d pxvalue=%d\n",distance,pxvalue);
 	input_report_abs(data->psensor_input_dev, ABS_DISTANCE, distance);
 	input_sync(data->psensor_input_dev);
@@ -1355,28 +1356,29 @@ static void ap3426_work_handler(struct work_struct *w)
     struct ap3426_data *data =
 	container_of(w, struct ap3426_data, ap3426_work);
     u8 int_stat;
-    //int pxvalue;
+    int pxvalue;
     int distance;
     int value;
     int_stat = ap3426_get_intstat(data->client);
-
+    //printk(KERN_ERR "zhang %s int_stat=%d\n",__func__,int_stat);
     if((1 == misc_ps_opened) && (int_stat & AP3426_REG_SYS_INT_PMASK))
     {
 	distance = ap3426_get_object(data->client);
 	input_report_abs(data->psensor_input_dev, ABS_DISTANCE, distance);
 	input_sync(data->psensor_input_dev);
-         //pxvalue = ap3426_get_px_value(data->client);
-	//printk(KERN_ERR "zhang %s pxvalue=%d distance=%d\n",__func__,pxvalue,distance);
+	wake_lock_timeout(&data->ps_wakelock, 2*HZ);
+	pxvalue = ap3426_get_px_value(data->client);
+	printk(KERN_ERR "zhang %s pxvalue=%d distance=%d\n",__func__,pxvalue,distance);
 
     }
-#ifdef AP3426_HEARTBEAT_SENSOR
+
     if(1 == misc_ht_opened)
     {
-        pxvalue = ap3426_get_px_value(data->client);
-        input_report_abs(data->hsensor_input_dev, ABS_WHEEL, pxvalue);
-        input_sync(data->hsensor_input_dev);
+	pxvalue = ap3426_get_px_value(data->client);
+	input_report_abs(data->hsensor_input_dev, ABS_WHEEL, pxvalue);
+	input_sync(data->hsensor_input_dev);
     }
-#endif /* AP3426_HEARTBEAT_SENSOR */
+
     if((1 == misc_ls_opened) && (int_stat & AP3426_REG_SYS_INT_AMASK))
     {
 	value = ap3426_get_adc_value(data->client);
@@ -1386,16 +1388,16 @@ static void ap3426_work_handler(struct work_struct *w)
     enable_irq(data->client->irq);
 }
 
-
 static irqreturn_t ap3426_irq(int irq, void *data_)
 {
-    struct ap3426_data *data = data_;
+	struct ap3426_data *data = data_;
+	mutex_lock(&data->int_lock);
+	//printk("!!!!!!!!!!!!!!!!!!!!!ap3426_irq !!!!!!!!!!!!!!!!  %d ,  %d\n",data->client->irq,gpio_to_irq(data->int_pin));
+	disable_irq_nosync(data->client->irq);
+	queue_work(data->ap3426_wq, &data->ap3426_work);
+	mutex_unlock(&data->int_lock);
 
-    //printk("!!!!!!!!!!!!!!!!!!!!!ap3426_irq !!!!!!!!!!!!!!!!  %d ,  %d\n",data->client->irq,gpio_to_irq(data->int_pin));
-    disable_irq_nosync(data->client->irq);
-    queue_work(data->ap3426_wq, &data->ap3426_work);
-
-    return IRQ_HANDLED;
+	return IRQ_HANDLED;
 }
 
 #ifdef CONFIG_OF
@@ -1440,212 +1442,206 @@ static int ap3426_parse_dt(struct device *dev, struct ap3426_data *pdata)
 static int ap3426_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
-    struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
-    struct ap3426_data *data;
-    int err = 0;
+	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
+	struct ap3426_data *data;
+	int err = 0;
 
-    if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
-    {
-	err = -EIO;
-	goto exit_free_gpio;
-    }
+	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
+	{
+		err = -EIO;
+		goto exit_free_gpio;
+	}
 
-    data = kzalloc(sizeof(struct ap3426_data), GFP_KERNEL);
-    if (!data)
-    {
-	err = -ENOMEM;
-	goto exit_free_gpio;
-    }
+	data = kzalloc(sizeof(struct ap3426_data), GFP_KERNEL);
+	if (!data)
+	{
+		err = -ENOMEM;
+		goto exit_free_gpio;
+	}
 
 #ifdef CONFIG_OF
-    if (client->dev.of_node) 
-    {
-	LDBG("Device Tree parsing.");
-
-	err = ap3426_parse_dt(&client->dev, data);
-	if (err) 
+	if (client->dev.of_node)
 	{
-	    dev_err(&client->dev, "%s: ap3426_parse_dt "
-		    "for pdata failed. err = %d",
-		    __func__, err);
-	    goto exit_parse_dt_fail;
+		LDBG("Device Tree parsing.");
+		err = ap3426_parse_dt(&client->dev, data);
+		if (err)
+		{
+			dev_err(&client->dev, "%s: ap3426_parse_dt "
+			"for pdata failed. err = %d",
+			__func__, err);
+			goto exit_parse_dt_fail;
+		}
 	}
-    }
 #else
-    data->irq = client->irq;
+	data->irq = client->irq;
 #endif
-   
 
-    data->client = client;
-    i2c_set_clientdata(client, data);
+	data->client = client;
+	i2c_set_clientdata(client, data);
 
-    err = ap3426_power_init(data, true);
-    if (err)
-	goto err_power_on;
-	
-    err = ap3426_power_ctl(data, true);
-    if (err)
-	goto err_power_ctl;
+	err = ap3426_power_init(data, true);
+	if (err)
+		goto err_power_on;
 
-    /* initialize the AP3426 chip */
-    err = ap3426_init_client(data);
-    if (err)
-	goto err_init_client;
-    if(ap3426_check_id(data) !=0 )
-    {
-	dev_err(&client->dev, "failed to check ap3426 id\n");
-        goto err_init_client;
-    }
+	err = ap3426_power_ctl(data, true);
+	if (err)
+		goto err_power_ctl;
 
-    err = ap3426_register_lsensor_device(client,data);
-    if (err)
-    {
-	dev_err(&client->dev, "failed to register_lsensor_device\n");
-	goto err_init_client;
-    }
+	/* initialize the AP3426 chip */
+	err = ap3426_init_client(data);
+	if (err)
+		goto err_init_client;
+	if(ap3426_check_id(data) !=0 )
+	{
+		dev_err(&client->dev, "failed to check ap3426 id\n");
+		goto err_init_client;
+	}
 
-    err = ap3426_register_psensor_device(client, data);
-    if (err) 
-    {
-	dev_err(&client->dev, "failed to register_psensor_device\n");
-	goto exit_free_ls_device;
-    }
-#ifdef AP3426_HEARTBEAT_SENSOR
-    err = ap3426_register_heartbeat_sensor_device(client, data);
-    if (err) 
-    {
-        dev_err(&client->dev, "failed to register_heartbeatsensor_device\n");
-        goto exit_free_ps_device;
-    }
+	err = ap3426_register_lsensor_device(client,data);
+	if (err)
+	{
+		dev_err(&client->dev, "failed to register_lsensor_device\n");
+		goto err_init_client;
+	}
 
-#endif /* AP3426_HEARTBEAT_SENSOR */
-    err = gpio_request(data->int_pin,"ap3426-int");
-    if(err < 0)
-    {
-	printk(KERN_ERR "%s: gpio_request, err=%d", __func__, err);
-#ifdef AP3426_HEARTBEAT_SENSOR
-        goto exit_free_heartbeat_device;
-#else
+	err = ap3426_register_psensor_device(client, data);
+	if (err)
+	{
+		dev_err(&client->dev, "failed to register_psensor_device\n");
+		goto exit_free_ls_device;
+	}
+
+#if 0 //zhanghaibin removed it,20141225
+	err = ap3426_register_heartbeat_sensor_device(client, data);
+	if (err)
+	{
+	dev_err(&client->dev, "failed to register_heartbeatsensor_device\n");
+	goto exit_free_heartbeats_device;
+	}
+	/* register sysfs hooks */
+	if (err)
 	goto exit_free_ps_device;
-#endif /* AP3426_HEARTBEAT_SENSOR */
-    }
-    err = gpio_direction_input(data->int_pin);
-    if(err < 0)
-    {
-        printk(KERN_ERR "%s: gpio_direction_input, err=%d", __func__, err);
-        goto exit_free_gpio_init;
-    }
+#endif
+	err = gpio_request(data->int_pin,"ap3426-int");
+	if(err < 0)
+	{
+		printk(KERN_ERR "%s: gpio_request, err=%d", __func__, err);
+		goto exit_free_ps_device;
+	}
+	err = gpio_direction_input(data->int_pin);
+	if(err < 0)
+	{
+		printk(KERN_ERR "%s: gpio_direction_input, err=%d", __func__, err);
+		goto exit_free_gpio_int;
+	}
 
-    err = request_threaded_irq(gpio_to_irq(data->int_pin), NULL, ap3426_irq,
-	    IRQF_TRIGGER_LOW  | IRQF_ONESHOT,
-	    "ap3426", data);
-    if (err) 
-    {
-	dev_err(&client->dev, "ret: %d, could not get IRQ %d\n",err,gpio_to_irq(data->int_pin));
-	goto exit_free_gpio_init;
-    }
+	err = request_threaded_irq(gpio_to_irq(data->int_pin), NULL, ap3426_irq,
+		IRQF_TRIGGER_LOW  | IRQF_ONESHOT,"ap3426", data);
+	if (err)
+	{
+		dev_err(&client->dev, "err:%d, could not get IRQ %d\n",err,gpio_to_irq(data->int_pin));
+		goto exit_free_gpio_int;
+	}
+	/*enable irq wake up,zhanghaibin,20150326*/
+	err=enable_irq_wake(gpio_to_irq(data->int_pin));
+	if(err)
+	{
+		dev_err(&client->dev, "err: %d, could not enable irq wake %d\n",err,gpio_to_irq(data->int_pin));
+		goto exit_request_irq;
+	}
 
-    /*enable irq wake up,zhanghaibin,20150326*/
-    err=enable_irq_wake(gpio_to_irq(data->int_pin));
-    if(err)
-    {
-        dev_err(&client->dev, "err: %d, could not enable irq wake %d\n",err,gpio_to_irq(data->int_pin));
-        goto exit_request_irq;
-    }
+	data->psensor_wq = create_singlethread_workqueue("psensor_wq");
+	if (!data->psensor_wq)
+	{
+		LDBG("%s: create psensor_wq workqueue failed\n", __func__);
+		err = -ENOMEM;
+		goto exit_request_irq;
+	}
+	INIT_WORK(&data->psensor_work, psensor_work_handler);
 
-    data->psensor_wq = create_singlethread_workqueue("psensor_wq");
-    if (!data->psensor_wq)
-    {
-	LDBG("%s: create psensor_wq workqueue failed\n", __func__);
-	err = -ENOMEM;
-	goto exit_request_irq;
-    }
-    INIT_WORK(&data->psensor_work, psensor_work_handler);
+	data->lsensor_wq = create_singlethread_workqueue("lsensor_wq");
+	if (!data->lsensor_wq) {
+		LDBG("%s: create lsensor_wq workqueue failed\n", __func__);
+		err = -ENOMEM;
+		goto err_create_psensor_wq;
+	}
+	INIT_WORK(&data->lsensor_work, lsensor_work_handler);
 
-    data->lsensor_wq = create_singlethread_workqueue("lsensor_wq");
-    if (!data->lsensor_wq) {
-	LDBG("%s: create lsensor_wq workqueue failed\n", __func__);
-	err = -ENOMEM;
-	goto err_create_psensor_wq;
-    }
-    INIT_WORK(&data->lsensor_work, lsensor_work_handler);
-    setup_timer(&data->pl_timer, pl_timer_callback, 0);
+	setup_timer(&data->pl_timer, pl_timer_callback, 0);
 
-    err = sysfs_create_group(&data->client->dev.kobj, &ap3426_attr_group);
-    if (err)
-    {
-        goto err_sysfs_create_group;
-    }
+	err = sysfs_create_group(&data->client->dev.kobj, &ap3426_attr_group);
+	if (err)
+		goto err_sysfs_create_group;
 
-    data->ap3426_wq = create_singlethread_workqueue("ap3426_wq");
-    if (!data->ap3426_wq)
-    {
-	LDBG("%s: create ap3426_wq workqueue failed\n", __func__);
-	err = -ENOMEM;
-	goto err_create_wq_failed;
-    }
-    INIT_WORK(&data->ap3426_work, ap3426_work_handler);
+	data->ap3426_wq = create_singlethread_workqueue("ap3426_wq");
+	if (!data->ap3426_wq)
+	{
+		LDBG("%s: create ap3426_wq workqueue failed\n", __func__);
+		err = -ENOMEM;
+		goto err_create_wq_failed;
+	}
+	INIT_WORK(&data->ap3426_work, ap3426_work_handler);
+	wake_lock_init(&data->ps_wakelock,WAKE_LOCK_SUSPEND, "ps_wakelock");
+	mutex_init(&data->int_lock);
 
-    data->als_cdev = sensors_light_cdev;
-    data->als_cdev.sensors_enable = ap3426_als_enable_set;
-    data->als_cdev.sensors_poll_delay = ap3426_als_poll_delay_set;
-    err = sensors_classdev_register(&client->dev, &data->als_cdev);
-    if (err)
-        goto err_sensors_classdev_register;
+	data->als_cdev = sensors_light_cdev;
+	data->als_cdev.sensors_enable = ap3426_als_enable_set;
+	data->als_cdev.sensors_poll_delay = ap3426_als_poll_delay_set;
+	err = sensors_classdev_register(&client->dev, &data->als_cdev);
+	if (err)
+		goto err_sensors_classdev_register;
 
-    data->ps_cdev = sensors_proximity_cdev;
-    data->ps_cdev.sensors_enable = ap3426_ps_enable_set;
-    err = sensors_classdev_register(&client->dev, &data->ps_cdev);
-    if(err)
-	goto err_sensors_classdev_register_ps;
+	data->ps_cdev = sensors_proximity_cdev;
+	data->ps_cdev.sensors_enable = ap3426_ps_enable_set;
+	err = sensors_classdev_register(&client->dev, &data->ps_cdev);
+	if(err)
+		goto err_sensors_classdev_register_ps;
 
-    private_pl_data = data;
+	private_pl_data = data;
 
-    /*init the ps event value because it may cause screen off at first call,zhanghaibin,20140114*/
-    input_report_abs(data->psensor_input_dev, ABS_DISTANCE, 1);
-    input_sync(data->psensor_input_dev);
+	/*init the ps event value because it may cause screen off at first call,zhanghaibin,20140114*/
+	input_report_abs(data->psensor_input_dev, ABS_DISTANCE, 1);
+	input_sync(data->psensor_input_dev);
 
-    dev_info(&client->dev, "Driver version %s enabled\n", DRIVER_VERSION);
-    return 0;
+	dev_info(&client->dev, "Driver version %s enabled\n", DRIVER_VERSION);
+	return 0;
 
 err_sensors_classdev_register_ps:
-    sensors_classdev_unregister(&data->als_cdev);
+	sensors_classdev_unregister(&data->als_cdev);
 err_sensors_classdev_register:
-    if (data->ap3426_wq)
-        destroy_workqueue(data->ap3426_wq);
+	mutex_destroy(&data->int_lock);
+	wake_lock_destroy(&data->ps_wakelock);
+	if (data->ap3426_wq)
+	destroy_workqueue(data->ap3426_wq);
 err_create_wq_failed:
-    sysfs_remove_group(&data->client->dev.kobj, &ap3426_attr_group);
+	sysfs_remove_group(&data->client->dev.kobj, &ap3426_attr_group);
 err_sysfs_create_group:
-    if (data->lsensor_wq)
-        destroy_workqueue(data->lsensor_wq);
+	if (data->lsensor_wq)
+	destroy_workqueue(data->lsensor_wq);
 err_create_psensor_wq:
-    if (data->psensor_wq)
-        destroy_workqueue(data->psensor_wq);
+	if (data->psensor_wq)
+	destroy_workqueue(data->psensor_wq);
 exit_request_irq:
-    free_irq(gpio_to_irq(data->int_pin), data);
-exit_free_gpio_init:
-    gpio_free(data->int_pin);
+	free_irq(gpio_to_irq(data->int_pin), data);
+exit_free_gpio_int:
+	gpio_free(data->int_pin);
 exit_free_ps_device:
-    ap3426_unregister_psensor_device(client,data);
-#ifdef AP3426_HEARTBEAT_SENSOR
-exit_free_heartbeat_device:
-    ap3426_unregister_heartbeat_device(client,data);
-#endif /* AP3426_HEARTBEAT_SENSOR */
+	ap3426_unregister_psensor_device(client,data);
 exit_free_ls_device:
-    ap3426_unregister_lsensor_device(client,data);
+	ap3426_unregister_lsensor_device(client,data);
 err_init_client:
-    ap3426_power_ctl(data, false);
+	ap3426_power_ctl(data, false);
 err_power_ctl:
-    ap3426_power_init(data, false);
+	ap3426_power_init(data, false);
 err_power_on:
 #ifdef CONFIG_OF
 exit_parse_dt_fail:
-    LDBG("dts initialize failed.");
+	LDBG("dts initialize failed.");
 #endif
-    kfree(data);
+	kfree(data);
 exit_free_gpio:
-    return err;
-}
+	return err;
+	}
 
 static int ap3426_remove(struct i2c_client *client)
 {
@@ -1661,11 +1657,9 @@ static int ap3426_remove(struct i2c_client *client)
 //end    
     ap3426_unregister_psensor_device(client,data);
     ap3426_unregister_lsensor_device(client,data);
-#ifdef AP3462_HEARTBEAT_SENSOR
-    ap3426_unregister_heartbeat_device(client,data);
-#endif /* AP3462_HEARTBEAT_SENSOR */
-    ap3426_power_init(data, false);
+    //ap3426_unregister_heartbeat_device(client,data);
 
+    ap3426_power_init(data, false);
 
     ap3426_set_mode(client, 0);
     kfree(i2c_get_clientdata(client));
@@ -1678,7 +1672,8 @@ static int ap3426_remove(struct i2c_client *client)
 	destroy_workqueue(data->ap3426_wq);
     if(&data->pl_timer)
 	del_timer(&data->pl_timer);
-
+    wake_lock_destroy(&data->ps_wakelock);
+    mutex_destroy(&data->int_lock);
     return 0;
 }
 
@@ -1705,14 +1700,19 @@ static int ap3426_suspend(struct device *dev)
 	//int ret;
 	struct ap3426_data *ps_data = dev_get_drvdata(dev);
 
+	printk("%s: misc_ls_opened=%d", __func__,misc_ls_opened);
 	if(misc_ls_opened == 1)
 	{
 		ap3426_ls_enable(ps_data,false);
 		ps_data->rels_enable = 1;
 	}
-	ap3426_power_ctl(ps_data,false);
-	ap3426_power_init(ps_data,false);
-
+	/*Removed it because it may cause system can't wake up,zhanghaibin,20141231*/
+	//ap3426_power_init(ps_data,false);
+	/*power off when ps is disable,zhanghaibin,20150326*/
+	if (misc_ps_opened==0)
+	{
+		ap3426_power_ctl(ps_data,false);
+	}
 	return 0;
 }
 
@@ -1721,8 +1721,14 @@ static int ap3426_resume(struct device *dev)
 	//struct i2c_client *client = to_i2c_client(dev);
 	struct ap3426_data *ps_data = dev_get_drvdata(dev);
 
-	ap3426_power_init(ps_data,true);
-	ap3426_power_ctl(ps_data,true);
+	printk("%s: rels_enable=%d", __func__,ps_data ->rels_enable);
+	/*Removed it because it may cause system can't wake up,zhanghaibin,20141231*/
+	//ap3426_power_init(ps_data,true);
+	/*power on when ps is disable,zhanghaibin,20150326*/
+	if (misc_ps_opened==0)
+	{
+		ap3426_power_ctl(ps_data,true);
+	}
 
 	if(ps_data ->rels_enable == 1)
 	{
