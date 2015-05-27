@@ -236,8 +236,8 @@
 		vdd-supply = <&pm8916_l17>;
 		vio-supply = <&pm8916_l6>;
 		di,irq-gpio = <&msm_gpio 113 0x2002>;
-		di,ps-thdl = <450>;
-		di,ps-thdh = <550>;
+		di,ps-thdl = <60>;
+		di,ps-thdh = <120>;
 	};
 
 	kionix@e {
