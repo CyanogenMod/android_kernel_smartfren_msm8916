@@ -275,9 +275,9 @@
 };
 
 &pm8916_chg {
-	qcom,vddmax-mv = <4210>;
-	qcom,vddsafe-mv = <4230>;
-	qcom,vinmin-mv = <4300>;
+	qcom,vddmax-mv = <4360>;
+	qcom,vddsafe-mv = <4380>;
+	qcom,vinmin-mv = <4470>;
 	qcom,batt-hot-percentage = <25>;
 	qcom,batt-cold-percentage = <80>;
 	qcom,tchg-mins = <150>;
